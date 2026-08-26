@@ -187,3 +187,39 @@ it('warns only once when eviction starts', async () => {
   expect(warn).toHaveBeenCalledTimes(1);
   warn.mockRestore();
 });
+
+it('warns separately about a full cache and an oversized image', async () => {
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  withSmallBudget();
+
+  await cache.putCachedImage(image('https://example.com/huge.png', 2 * MB));
+  // 3 x 400KB goes over the 1024KB budget on the third put
+  for (let i = 0; i < 3; i++) {
+    await cache.putCachedImage(
+      image(`https://example.com/both-${i}.png`, 400 * KB)
+    );
+  }
+
+  expect(warn).toHaveBeenCalledTimes(2);
+  warn.mockRestore();
+});
+
+it('recounts when the stored total has drifted from the store', async () => {
+  withSmallBudget();
+  const drift = (name) => image(`https://example.com/${name}.png`, 300 * KB);
+  await cache.putCachedImage(drift('drift-a'));
+  await cache.putCachedImage(drift('drift-b'));
+
+  // devtools clearing the store, or a touch resurrecting an evicted entry
+  const db = await require('./db').dbPromise;
+  await db.put('meta', 5 * MB, 'totalBytes');
+
+  await cache.putCachedImage(drift('drift-c'));
+
+  const remaining = await db.getAll('cached');
+  const real = remaining.reduce(
+    (bytes, entry) => bytes + entry.data.byteLength,
+    0
+  );
+  expect(await db.get('meta', 'totalBytes')).toBe(real);
+});

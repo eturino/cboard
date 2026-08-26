@@ -2,10 +2,7 @@ import React from 'react';
 import { act } from 'react-dom/test-utils';
 import { shallow, mount } from 'enzyme';
 import Symbol from './Symbol';
-import {
-  getCachedImage,
-  putCachedImage
-} from '../../../idb/imageCache/imageCache';
+import { getCachedImage, putCachedImage } from '../../../idb/media/imageCache';
 
 // IndexedDB open + get resolve over several macrotasks, not just microtasks
 const flush = () =>
@@ -47,7 +44,7 @@ it('caches remote images in IndexedDB when opted in', async () => {
   await flush();
   wrapper.unmount();
 
-  expect(global.fetch).toHaveBeenCalledWith(img, { cache: 'force-cache' });
+  expect(global.fetch).toHaveBeenCalledWith(img);
   expect(await getCachedImage(img)).toMatchObject({
     url: img,
     type: 'image/png'

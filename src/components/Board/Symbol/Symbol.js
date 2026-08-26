@@ -9,10 +9,7 @@ import { LABEL_POSITION_BELOW } from '../../Settings/Display/Display.constants';
 import './Symbol.css';
 import { Typography } from '@material-ui/core';
 import { getArasaacDB } from '../../../idb/arasaac/arasaacdb';
-import {
-  getCachedImage,
-  putCachedImage
-} from '../../../idb/imageCache/imageCache';
+import { getCachedImage, putCachedImage } from '../../../idb/media/imageCache';
 
 const propTypes = {
   /**
