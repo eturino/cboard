@@ -105,12 +105,11 @@ function Symbol(props) {
         setSrc(formatSrc(image));
 
         if (cacheRemoteImage && navigator.onLine) {
-          // force-cache reuses the response the <img> above already fetched
-          // instead of hitting the network a second time for the same url.
+          // a second request for the same url: the <img> above is no-cors, so its
+          // response is opaque and cannot be read back. The http cache normally
+          // serves this one, and the first paint already came from the <img>.
           // on failure (offline, CORS) keep the network src and retry next render
-          const res = await fetch(image, { cache: 'force-cache' }).catch(
-            () => null
-          );
+          const res = await fetch(image).catch(() => null);
           const type = res?.headers.get('content-type') || '';
 
           // captive portals answer 200 with their own HTML: caching that would
