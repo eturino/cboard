@@ -53,13 +53,16 @@ function Symbol(props) {
     ...other
   } = props;
 
-  // a remote url is resolved from IndexedDB below; pointing the <img> at the
-  // network first costs a request the cache was meant to replace, and offline it
-  // paints a broken image before the cached copy swaps in
-  const [src, setSrc] = useState(
-    image && !isRemote(image) ? formatSrc(image) : ''
-  );
+  // render what the tile points at right away, then swap in the cached copy once
+  // IndexedDB answers: waiting on the lookup blanks every symbol on each render
+  const [src, setSrc] = useState(image ? formatSrc(image) : '');
   const objectUrlRef = useRef(null);
+  const imageRef = useRef(image);
+
+  if (imageRef.current !== image) {
+    imageRef.current = image;
+    setSrc(image ? formatSrc(image) : '');
+  }
 
   const fetchArasaacImagefromIndexedDB = useCallback(async (id) => {
     if (!id) return null;
@@ -100,25 +103,15 @@ function Symbol(props) {
       // still render offline. Service workers don't run in the Cordova webview,
       // so IndexedDB is the only durable cache on native. Reads are unconditional;
       // only writes need cacheRemoteImage, so images cached earlier keep working.
-      if (isRemote(image)) {
-        const remoteImage = await resolveRemoteImage(image, cacheRemoteImage);
-        if (cancelled) return;
+      if (!isRemote(image)) return;
 
-        if (remoteImage) {
-          setBlobSrc(remoteImage.data, remoteImage.type);
-          return;
-        }
+      const remoteImage = await resolveRemoteImage(image, cacheRemoteImage);
+      if (cancelled) return;
 
-        setSrc(formatSrc(image));
-        return;
+      // no bytes means the url stays on screen: it is already the rendered src
+      if (remoteImage) {
+        setBlobSrc(remoteImage.data, remoteImage.type);
       }
-
-      if (image) {
-        setSrc(formatSrc(image));
-        return;
-      }
-
-      setSrc('');
     }
     getSrc();
 

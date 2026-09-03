@@ -41,10 +41,11 @@ it('caches remote images in IndexedDB when opted in', async () => {
   const wrapper = mount(
     <Symbol label="dummy label" image={img} cacheRemoteImage />
   );
+  // the url paints straight away, without waiting on the IndexedDB lookup
+  expect(wrapper.find('.Symbol__image').prop('src')).toEqual(img);
+
   await flush();
 
-  // the fetched bytes are what the img renders: a second request for the same
-  // url is the cost the cache exists to avoid
   expect(global.fetch).toHaveBeenCalledTimes(1);
   expect(wrapper.update().find('.Symbol__image').prop('src')).toMatch(/^blob:/);
   wrapper.unmount();
@@ -96,6 +97,25 @@ it('serves an already cached image even without opting in', async () => {
 
   expect(global.fetch).not.toHaveBeenCalled();
   expect(wrapper.update().find('.Symbol__image').prop('src')).toMatch(/^blob:/);
+  wrapper.unmount();
+});
+
+it('drops the cached copy as soon as the image prop changes', async () => {
+  const cached = 'https://globalsymbols.com/first.png';
+  const next = 'https://globalsymbols.com/second.png';
+  await putCachedImage({
+    url: cached,
+    type: 'image/png',
+    data: new ArrayBuffer(8)
+  });
+  global.fetch = jest.fn();
+
+  const wrapper = mount(<Symbol label="dummy label" image={cached} />);
+  await flush();
+  expect(wrapper.update().find('.Symbol__image').prop('src')).toMatch(/^blob:/);
+
+  wrapper.setProps({ image: next });
+  expect(wrapper.find('.Symbol__image').prop('src')).toEqual(next);
   wrapper.unmount();
 });
 
