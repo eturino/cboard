@@ -51,6 +51,10 @@ it('fetches, returns, and stores an uncached image when caching is enabled', asy
     type: fetched.type,
     data: fetched.data
   });
+  // the <img> already requested this url; reuse the browser's copy when it has one
+  expect(global.fetch).toHaveBeenCalledWith(fetched.url, {
+    cache: 'force-cache'
+  });
 });
 
 it('returns no bytes for an unreadable response and retries on a later call', async () => {
