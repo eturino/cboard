@@ -42,13 +42,31 @@ it('caches remote images in IndexedDB when opted in', async () => {
     <Symbol label="dummy label" image={img} cacheRemoteImage />
   );
   await flush();
+
+  // the fetched bytes are what the img renders: a second request for the same
+  // url is the cost the cache exists to avoid
+  expect(global.fetch).toHaveBeenCalledTimes(1);
+  expect(wrapper.update().find('.Symbol__image').prop('src')).toMatch(/^blob:/);
   wrapper.unmount();
 
-  expect(global.fetch).toHaveBeenCalledWith(img);
   expect(await getCachedImage(img)).toMatchObject({
     url: img,
     type: 'image/png'
   });
+});
+
+it('falls back to the network url when the remote image cannot be read', async () => {
+  const img = 'https://no-cors.example.com/symbol.png';
+  global.fetch = jest.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+
+  const wrapper = mount(
+    <Symbol label="dummy label" image={img} cacheRemoteImage />
+  );
+  await flush();
+
+  expect(wrapper.update().find('.Symbol__image').prop('src')).toEqual(img);
+  expect(global.fetch).toHaveBeenCalledTimes(1);
+  wrapper.unmount();
 });
 
 it('does not cache remote images by default', async () => {
@@ -60,7 +78,7 @@ it('does not cache remote images by default', async () => {
 
   expect(global.fetch).not.toHaveBeenCalled();
   expect(await getCachedImage(img)).toBeUndefined();
-  expect(wrapper.find('.Symbol__image').prop('src')).toEqual(img);
+  expect(wrapper.update().find('.Symbol__image').prop('src')).toEqual(img);
   wrapper.unmount();
 });
 

@@ -9,7 +9,7 @@ import { LABEL_POSITION_BELOW } from '../../Settings/Display/Display.constants';
 import './Symbol.css';
 import { Typography } from '@material-ui/core';
 import { getArasaacDB } from '../../../idb/arasaac/arasaacdb';
-import { getCachedImage, putCachedImage } from '../../../idb/media/imageCache';
+import { resolveRemoteImage } from '../../../idb/media/remoteImageLoader';
 
 const propTypes = {
   /**
@@ -37,6 +37,8 @@ function formatSrc(src) {
   return isPackagedApp() && src?.startsWith('/') ? `.${src}` : src;
 }
 
+const isRemote = (src) => /^https?:\/\//.test(src ?? '');
+
 function Symbol(props) {
   const {
     className,
@@ -51,7 +53,12 @@ function Symbol(props) {
     ...other
   } = props;
 
-  const [src, setSrc] = useState(image ? formatSrc(image) : '');
+  // a remote url is resolved from IndexedDB below; pointing the <img> at the
+  // network first costs a request the cache was meant to replace, and offline it
+  // paints a broken image before the cached copy swaps in
+  const [src, setSrc] = useState(
+    image && !isRemote(image) ? formatSrc(image) : ''
+  );
   const objectUrlRef = useRef(null);
 
   const fetchArasaacImagefromIndexedDB = useCallback(async (id) => {
@@ -93,35 +100,16 @@ function Symbol(props) {
       // still render offline. Service workers don't run in the Cordova webview,
       // so IndexedDB is the only durable cache on native. Reads are unconditional;
       // only writes need cacheRemoteImage, so images cached earlier keep working.
-      if (image && /^https?:\/\//.test(image)) {
-        const cached = await getCachedImage(image);
+      if (isRemote(image)) {
+        const remoteImage = await resolveRemoteImage(image, cacheRemoteImage);
         if (cancelled) return;
 
-        if (cached) {
-          setBlobSrc(cached.data, cached.type);
+        if (remoteImage) {
+          setBlobSrc(remoteImage.data, remoteImage.type);
           return;
         }
 
         setSrc(formatSrc(image));
-
-        if (cacheRemoteImage && navigator.onLine) {
-          // a second request for the same url: the <img> above is no-cors, so its
-          // response is opaque and cannot be read back. The http cache normally
-          // serves this one, and the first paint already came from the <img>.
-          // on failure (offline, CORS) keep the network src and retry next render
-          const res = await fetch(image).catch(() => null);
-          const type = res?.headers.get('content-type') || '';
-
-          // captive portals answer 200 with their own HTML: caching that would
-          // poison this url forever, since a cache hit never re-fetches
-          if (res?.ok && type.startsWith('image/')) {
-            await putCachedImage({
-              url: image,
-              type,
-              data: await res.arrayBuffer()
-            });
-          }
-        }
         return;
       }
 
