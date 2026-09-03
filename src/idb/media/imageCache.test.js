@@ -223,3 +223,31 @@ it('recounts when the stored total has drifted from the store', async () => {
   );
   expect(await db.get('meta', 'totalBytes')).toBe(real);
 });
+
+it('keeps the space it freed when the write that follows fails', async () => {
+  jest.spyOn(console, 'error').mockImplementation(() => {});
+  withSmallBudget();
+  const full = (name) => image(`https://example.com/${name}.png`, 400 * KB);
+  await cache.putCachedImage(full('quota-a'));
+  await cache.putCachedImage(full('quota-b'));
+
+  const db = await require('./db').dbPromise;
+  const put = IDBObjectStore.prototype.put;
+  // the browser refusing the write once the real quota is reached, below the
+  // budget the cache computed for itself
+  jest
+    .spyOn(IDBObjectStore.prototype, 'put')
+    .mockImplementation(function (value, key) {
+      if (value?.url) throw new Error('QuotaExceededError');
+      return put.call(this, value, key);
+    });
+
+  await cache.putCachedImage(full('quota-c'));
+  IDBObjectStore.prototype.put.mockRestore();
+
+  const remaining = await db.getAll('cached');
+  expect(remaining.map((entry) => entry.url)).toEqual([
+    'https://example.com/quota-b.png'
+  ]);
+  expect(await db.get('meta', 'totalBytes')).toBe(400 * KB);
+});
