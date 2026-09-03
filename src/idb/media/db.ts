@@ -39,6 +39,8 @@ export interface MediaDB extends DBSchema {
   };
 }
 
+let openedDB: IDBPDatabase<MediaDB> | null = null;
+
 export const dbPromise = openDB<MediaDB>('cboard-media', 1, {
   upgrade(db: IDBPDatabase<MediaDB>): void {
     const cached = db.createObjectStore('cached', { keyPath: 'url' });
@@ -48,5 +50,26 @@ export const dbPromise = openDB<MediaDB>('cboard-media', 1, {
     local.createIndex('byCreatedAt', 'createdAt');
 
     db.createObjectStore('meta');
+  },
+  blocked(): void {
+    console.warn('Media database upgrade is blocked by another open tab.');
+  },
+  // another tab is upgrading: hold the connection open and it waits forever
+  blocking(): void {
+    openedDB?.close();
+    openedDB = null;
+  },
+  terminated(): void {
+    openedDB = null;
   }
 });
+
+// where IndexedDB is unavailable (private mode, webviews with storage off) the
+// open rejects at import time, before any call site has attached a handler
+dbPromise
+  .then((db: IDBPDatabase<MediaDB>) => {
+    openedDB = db;
+  })
+  .catch((error: unknown) => {
+    console.error('Media database unavailable:', error);
+  });
