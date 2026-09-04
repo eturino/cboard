@@ -1,5 +1,5 @@
 import { getCachedImage, putCachedImage } from './imageCache';
-import { resolveRemoteImage } from './remoteImageLoader';
+import { storeRemoteImage } from './remoteImageLoader';
 
 jest.mock('./imageCache', () => ({
   getCachedImage: jest.fn(),
@@ -12,6 +12,12 @@ const image = (url = 'https://example.com/symbol.png') => ({
   data: new ArrayBuffer(4)
 });
 
+const okResponse = (type = 'image/png', data = new ArrayBuffer(4)) => ({
+  ok: true,
+  headers: { get: () => type },
+  arrayBuffer: async () => data
+});
+
 beforeEach(() => {
   jest.clearAllMocks();
   global.fetch = jest.fn();
@@ -21,76 +27,82 @@ beforeEach(() => {
   });
 });
 
-it('returns a durable cache hit without fetching', async () => {
-  const cached = image();
-  getCachedImage.mockResolvedValue(cached);
-
-  await expect(resolveRemoteImage(cached.url, true)).resolves.toEqual(cached);
-
-  expect(global.fetch).not.toHaveBeenCalled();
-  expect(putCachedImage).not.toHaveBeenCalled();
-});
-
-it('fetches, returns, and stores an uncached image when caching is enabled', async () => {
-  const fetched = image();
+it('fetches and stores an image that is not cached yet', async () => {
+  const fetched = image('https://example.com/store.png');
   getCachedImage.mockResolvedValue(undefined);
-  global.fetch.mockResolvedValue({
-    ok: true,
-    headers: { get: () => fetched.type },
-    arrayBuffer: async () => fetched.data
-  });
+  global.fetch.mockResolvedValue(okResponse(fetched.type, fetched.data));
 
-  await expect(resolveRemoteImage(fetched.url, true)).resolves.toEqual({
-    url: fetched.url,
-    type: fetched.type,
-    data: fetched.data
-  });
+  await storeRemoteImage(fetched.url);
 
+  expect(global.fetch).toHaveBeenCalledWith(fetched.url);
   expect(putCachedImage).toHaveBeenCalledWith({
     url: fetched.url,
     type: fetched.type,
     data: fetched.data
   });
-  // the <img> already requested this url; reuse the browser's copy when it has one
-  expect(global.fetch).toHaveBeenCalledWith(fetched.url, {
-    cache: 'force-cache'
-  });
 });
 
-it('returns no bytes for an unreadable response and retries on a later call', async () => {
+it('skips the IndexedDB read once a url has been handled', async () => {
+  const url = 'https://example.com/known.png';
+  getCachedImage.mockResolvedValue(undefined);
+  global.fetch.mockResolvedValue(okResponse());
+
+  await storeRemoteImage(url);
+  await storeRemoteImage(url);
+
+  expect(getCachedImage).toHaveBeenCalledTimes(1);
+  expect(global.fetch).toHaveBeenCalledTimes(1);
+});
+
+it('does not re-fetch a url already in the store', async () => {
+  const cached = image('https://example.com/already.png');
+  getCachedImage.mockResolvedValue(cached);
+
+  await storeRemoteImage(cached.url);
+
+  expect(global.fetch).not.toHaveBeenCalled();
+  expect(putCachedImage).not.toHaveBeenCalled();
+});
+
+it('does not store an unreadable response and retries on a later call', async () => {
   const url = 'https://example.com/retry.png';
   getCachedImage.mockResolvedValue(undefined);
   global.fetch
     .mockRejectedValueOnce(new TypeError('Failed to fetch'))
-    .mockResolvedValueOnce({
-      ok: true,
-      headers: { get: () => 'image/png' },
-      arrayBuffer: async () => new ArrayBuffer(4)
-    });
+    .mockResolvedValueOnce(okResponse());
 
-  await expect(resolveRemoteImage(url, true)).resolves.toBeUndefined();
-  await expect(resolveRemoteImage(url, true)).resolves.toMatchObject({
-    type: 'image/png'
-  });
+  await storeRemoteImage(url);
+  expect(putCachedImage).not.toHaveBeenCalled();
 
+  await storeRemoteImage(url);
+  expect(putCachedImage).toHaveBeenCalledTimes(1);
   expect(global.fetch).toHaveBeenCalledTimes(2);
 });
 
-it('does not fetch when durable caching is disabled or offline', async () => {
-  const url = 'https://example.com/no-fetch.png';
+it('does not store a captive portal response', async () => {
+  const url = 'https://example.com/portal.png';
   getCachedImage.mockResolvedValue(undefined);
+  global.fetch.mockResolvedValue(okResponse('text/html; charset=utf-8'));
 
-  await expect(resolveRemoteImage(url, false)).resolves.toBeUndefined();
+  await storeRemoteImage(url);
+
+  expect(putCachedImage).not.toHaveBeenCalled();
+});
+
+it('does not fetch while offline', async () => {
+  getCachedImage.mockResolvedValue(undefined);
   Object.defineProperty(window.navigator, 'onLine', {
     configurable: true,
     value: false
   });
-  await expect(resolveRemoteImage(url, true)).resolves.toBeUndefined();
+
+  await storeRemoteImage('https://example.com/offline.png');
 
   expect(global.fetch).not.toHaveBeenCalled();
+  expect(getCachedImage).not.toHaveBeenCalled();
 });
 
-it('shares one fetch and one cache write for concurrent cache misses', async () => {
+it('shares one fetch and one cache write for concurrent misses', async () => {
   const url = 'https://example.com/shared.png';
   const data = new ArrayBuffer(4);
   getCachedImage.mockResolvedValue(undefined);
@@ -101,18 +113,11 @@ it('shares one fetch and one cache write for concurrent cache misses', async () 
     })
   );
 
-  const first = resolveRemoteImage(url, true);
-  const second = resolveRemoteImage(url, true);
-  resolveFetch({
-    ok: true,
-    headers: { get: () => 'image/png' },
-    arrayBuffer: async () => data
-  });
+  const first = storeRemoteImage(url);
+  const second = storeRemoteImage(url);
+  resolveFetch(okResponse('image/png', data));
+  await Promise.all([first, second]);
 
-  await expect(Promise.all([first, second])).resolves.toEqual([
-    { url, type: 'image/png', data },
-    { url, type: 'image/png', data }
-  ]);
   expect(global.fetch).toHaveBeenCalledTimes(1);
   expect(putCachedImage).toHaveBeenCalledTimes(1);
 });
