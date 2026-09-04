@@ -13,6 +13,8 @@ let blobUrlCount = 0;
 global.URL.createObjectURL = () => `blob:test/${++blobUrlCount}`;
 global.URL.revokeObjectURL = () => {};
 
+const srcOf = (wrapper) => wrapper.update().find('.Symbol__image').prop('src');
+
 it('renders without crashing', () => {
   shallow(<Symbol label="dummy label" labelpos="Below" />);
 });
@@ -30,6 +32,25 @@ it('renders with correct image source path', () => {
   expect(symbolImage.prop('src')).toEqual(img);
 });
 
+it('keeps the url on screen and reads nothing while the image loads', async () => {
+  const img = 'https://globalsymbols.com/rendered.png';
+  await putCachedImage({
+    url: img,
+    type: 'image/png',
+    data: new ArrayBuffer(8)
+  });
+  global.fetch = jest.fn();
+
+  const wrapper = mount(<Symbol label="dummy label" image={img} />);
+  wrapper.find('.Symbol__image').simulate('load');
+  await flush();
+
+  // a stored copy exists, but swapping the painted url for it would only flicker
+  expect(srcOf(wrapper)).toEqual(img);
+  expect(global.fetch).not.toHaveBeenCalled();
+  wrapper.unmount();
+});
+
 it('caches remote images in IndexedDB when opted in', async () => {
   const img = 'https://globalsymbols.com/symbol.png';
   global.fetch = jest.fn().mockResolvedValue({
@@ -41,13 +62,12 @@ it('caches remote images in IndexedDB when opted in', async () => {
   const wrapper = mount(
     <Symbol label="dummy label" image={img} cacheRemoteImage />
   );
-  // the url paints straight away, without waiting on the IndexedDB lookup
-  expect(wrapper.find('.Symbol__image').prop('src')).toEqual(img);
-
+  wrapper.find('.Symbol__image').simulate('load');
   await flush();
 
   expect(global.fetch).toHaveBeenCalledTimes(1);
-  expect(wrapper.update().find('.Symbol__image').prop('src')).toMatch(/^blob:/);
+  // caching happens off the render path: the painted url never changes
+  expect(srcOf(wrapper)).toEqual(img);
   wrapper.unmount();
 
   expect(await getCachedImage(img)).toMatchObject({
@@ -56,35 +76,8 @@ it('caches remote images in IndexedDB when opted in', async () => {
   });
 });
 
-it('falls back to the network url when the remote image cannot be read', async () => {
-  const img = 'https://no-cors.example.com/symbol.png';
-  global.fetch = jest.fn().mockRejectedValue(new TypeError('Failed to fetch'));
-
-  const wrapper = mount(
-    <Symbol label="dummy label" image={img} cacheRemoteImage />
-  );
-  await flush();
-
-  expect(wrapper.update().find('.Symbol__image').prop('src')).toEqual(img);
-  expect(global.fetch).toHaveBeenCalledTimes(1);
-  wrapper.unmount();
-});
-
-it('does not cache remote images by default', async () => {
-  const img = 'https://globalsymbols.com/suggestion.png';
-  global.fetch = jest.fn();
-
-  const wrapper = mount(<Symbol label="dummy label" image={img} />);
-  await flush();
-
-  expect(global.fetch).not.toHaveBeenCalled();
-  expect(await getCachedImage(img)).toBeUndefined();
-  expect(wrapper.update().find('.Symbol__image').prop('src')).toEqual(img);
-  wrapper.unmount();
-});
-
-it('serves an already cached image even without opting in', async () => {
-  const img = 'https://globalsymbols.com/previously-cached.png';
+it('serves the cached copy when the image fails to load', async () => {
+  const img = 'https://globalsymbols.com/offline.png';
   await putCachedImage({
     url: img,
     type: 'image/png',
@@ -93,10 +86,53 @@ it('serves an already cached image even without opting in', async () => {
   global.fetch = jest.fn();
 
   const wrapper = mount(<Symbol label="dummy label" image={img} />);
+  expect(srcOf(wrapper)).toEqual(img);
+
+  wrapper.find('.Symbol__image').simulate('error');
+  await flush();
+
+  expect(srcOf(wrapper)).toMatch(/^blob:/);
+  expect(global.fetch).not.toHaveBeenCalled();
+  wrapper.unmount();
+});
+
+it('keeps the network url when a failed image is not cached', async () => {
+  const img = 'https://globalsymbols.com/missing.png';
+  global.fetch = jest.fn();
+
+  const wrapper = mount(<Symbol label="dummy label" image={img} />);
+  wrapper.find('.Symbol__image').simulate('error');
+  await flush();
+
+  expect(srcOf(wrapper)).toEqual(img);
+  wrapper.unmount();
+});
+
+it('keeps the url when a repeatedly failing image has nothing stored', async () => {
+  const img = 'https://globalsymbols.com/broken.png';
+  global.fetch = jest.fn();
+
+  const wrapper = mount(<Symbol label="dummy label" image={img} />);
+  const image = wrapper.find('.Symbol__image');
+  image.simulate('error');
+  image.simulate('error');
+  await flush();
+
+  expect(srcOf(wrapper)).toEqual(img);
+  wrapper.unmount();
+});
+
+it('does not cache remote images by default', async () => {
+  const img = 'https://globalsymbols.com/suggestion.png';
+  global.fetch = jest.fn();
+
+  const wrapper = mount(<Symbol label="dummy label" image={img} />);
+  wrapper.find('.Symbol__image').simulate('load');
   await flush();
 
   expect(global.fetch).not.toHaveBeenCalled();
-  expect(wrapper.update().find('.Symbol__image').prop('src')).toMatch(/^blob:/);
+  expect(await getCachedImage(img)).toBeUndefined();
+  expect(srcOf(wrapper)).toEqual(img);
   wrapper.unmount();
 });
 
@@ -111,11 +147,12 @@ it('drops the cached copy as soon as the image prop changes', async () => {
   global.fetch = jest.fn();
 
   const wrapper = mount(<Symbol label="dummy label" image={cached} />);
+  wrapper.find('.Symbol__image').simulate('error');
   await flush();
-  expect(wrapper.update().find('.Symbol__image').prop('src')).toMatch(/^blob:/);
+  expect(srcOf(wrapper)).toMatch(/^blob:/);
 
   wrapper.setProps({ image: next });
-  expect(wrapper.find('.Symbol__image').prop('src')).toEqual(next);
+  expect(srcOf(wrapper)).toEqual(next);
   wrapper.unmount();
 });
 
@@ -130,6 +167,7 @@ it('does not cache captive portal responses', async () => {
   const wrapper = mount(
     <Symbol label="dummy label" image={img} cacheRemoteImage />
   );
+  wrapper.find('.Symbol__image').simulate('load');
   await flush();
   wrapper.unmount();
 

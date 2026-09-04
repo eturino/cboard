@@ -9,7 +9,8 @@ import { LABEL_POSITION_BELOW } from '../../Settings/Display/Display.constants';
 import './Symbol.css';
 import { Typography } from '@material-ui/core';
 import { getArasaacDB } from '../../../idb/arasaac/arasaacdb';
-import { resolveRemoteImage } from '../../../idb/media/remoteImageLoader';
+import { getCachedImage } from '../../../idb/media/imageCache';
+import { storeRemoteImage } from '../../../idb/media/remoteImageLoader';
 
 const propTypes = {
   /**
@@ -39,6 +40,65 @@ function formatSrc(src) {
 
 const isRemote = (src) => /^https?:\/\//.test(src ?? '');
 
+async function getStoredImage(image, keyPath) {
+  if (keyPath) {
+    try {
+      const media = await getArasaacDB().getImageById(keyPath);
+      if (media) return media;
+    } catch (error) {
+      console.error('Failed to fetch Arasaac image from Indexed DB:', error);
+    }
+  }
+
+  return isRemote(image) ? getCachedImage(image) : undefined;
+}
+
+function SymbolImage({ image, keyPath, cacheRemoteImage }) {
+  const [src, setSrc] = useState(image ? formatSrc(image) : '');
+  const blobUrl = useRef(null);
+
+  useEffect(
+    () => () => {
+      if (blobUrl.current) URL.revokeObjectURL(blobUrl.current);
+    },
+    []
+  );
+
+  const showStoredImage = useCallback(async () => {
+    if (blobUrl.current) return;
+
+    const media = await getStoredImage(image, keyPath);
+
+    if (!media || blobUrl.current) return;
+
+    blobUrl.current = URL.createObjectURL(
+      new Blob([media.data], { type: media.type })
+    );
+    setSrc(blobUrl.current);
+  }, [image, keyPath]);
+
+  useEffect(() => {
+    if (!image && keyPath) showStoredImage();
+  }, [image, keyPath, showStoredImage]);
+
+  const handleLoad = () => {
+    if (blobUrl.current || !cacheRemoteImage || !isRemote(image)) return;
+    storeRemoteImage(image);
+  };
+
+  if (!src) return null;
+
+  return (
+    <img
+      className="Symbol__image"
+      src={src}
+      alt=""
+      onError={showStoredImage}
+      onLoad={handleLoad}
+    />
+  );
+}
+
 function Symbol(props) {
   const {
     className,
@@ -53,77 +113,6 @@ function Symbol(props) {
     ...other
   } = props;
 
-  // render what the tile points at right away, then swap in the cached copy once
-  // IndexedDB answers: waiting on the lookup blanks every symbol on each render
-  const [src, setSrc] = useState(image ? formatSrc(image) : '');
-  const objectUrlRef = useRef(null);
-  const imageRef = useRef(image);
-
-  if (imageRef.current !== image) {
-    imageRef.current = image;
-    setSrc(image ? formatSrc(image) : '');
-  }
-
-  const fetchArasaacImagefromIndexedDB = useCallback(async (id) => {
-    if (!id) return null;
-
-    try {
-      const arasaacDB = getArasaacDB();
-      return await arasaacDB.getImageById(id);
-    } catch (error) {
-      console.error('Failed to fetch Arasaac image from Indexed DB:', error);
-      return null;
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function getSrc() {
-      const setBlobSrc = (data, type) => {
-        const blob = new Blob([data], { type });
-        const url = URL.createObjectURL(blob);
-        if (objectUrlRef.current) {
-          URL.revokeObjectURL(objectUrlRef.current);
-        }
-        objectUrlRef.current = url;
-        setSrc(url);
-      };
-
-      const imageFromIndexedDb = await fetchArasaacImagefromIndexedDB(keyPath);
-
-      if (cancelled) return;
-
-      if (imageFromIndexedDb) {
-        setBlobSrc(imageFromIndexedDb.data, imageFromIndexedDb.type);
-        return;
-      }
-
-      // Serve remote symbol images (e.g. globalsymbols.com) from IndexedDB so they
-      // still render offline. Service workers don't run in the Cordova webview,
-      // so IndexedDB is the only durable cache on native. Reads are unconditional;
-      // only writes need cacheRemoteImage, so images cached earlier keep working.
-      if (!isRemote(image)) return;
-
-      const remoteImage = await resolveRemoteImage(image, cacheRemoteImage);
-      if (cancelled) return;
-
-      // no bytes means the url stays on screen: it is already the rendered src
-      if (remoteImage) {
-        setBlobSrc(remoteImage.data, remoteImage.type);
-      }
-    }
-    getSrc();
-
-    return () => {
-      cancelled = true;
-      if (objectUrlRef.current) {
-        URL.revokeObjectURL(objectUrlRef.current);
-        objectUrlRef.current = null;
-      }
-    };
-  }, [fetchArasaacImagefromIndexedDB, image, keyPath, cacheRemoteImage]);
-
   const symbolClassName = classNames('Symbol', className);
 
   const handleKeyPress = (event) => {
@@ -134,7 +123,7 @@ function Symbol(props) {
   };
 
   return (
-    <div className={symbolClassName} image={src} {...other}>
+    <div className={symbolClassName} image={image} {...other}>
       {props.type === 'live' && (
         <OutlinedInput
           id="outlined-live-input"
@@ -163,7 +152,12 @@ function Symbol(props) {
         )}
 
       <div className="Symbol__image-container">
-        {src && <img className="Symbol__image" src={src} alt="" />}
+        <SymbolImage
+          key={image || keyPath}
+          image={image}
+          keyPath={keyPath}
+          cacheRemoteImage={cacheRemoteImage}
+        />
       </div>
 
       {props.type !== 'live' &&
