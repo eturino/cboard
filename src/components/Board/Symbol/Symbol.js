@@ -56,9 +56,11 @@ async function getStoredImage(image, keyPath) {
 function SymbolImage({ image, keyPath, cacheRemoteImage }) {
   const [src, setSrc] = useState(image ? formatSrc(image) : '');
   const blobUrl = useRef(null);
+  const mounted = useRef(true);
 
   useEffect(
     () => () => {
+      mounted.current = false;
       if (blobUrl.current) URL.revokeObjectURL(blobUrl.current);
     },
     []
@@ -69,7 +71,7 @@ function SymbolImage({ image, keyPath, cacheRemoteImage }) {
 
     const media = await getStoredImage(image, keyPath);
 
-    if (!media || blobUrl.current) return;
+    if (!media || blobUrl.current || !mounted.current) return;
 
     blobUrl.current = URL.createObjectURL(
       new Blob([media.data], { type: media.type })
