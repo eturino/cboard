@@ -14,8 +14,16 @@ const image = (url = 'https://example.com/symbol.png') => ({
 
 const okResponse = (type = 'image/png', data = new ArrayBuffer(4)) => ({
   ok: true,
+  status: 200,
   headers: { get: () => type },
   arrayBuffer: async () => data
+});
+
+const errorResponse = (status) => ({
+  ok: false,
+  status,
+  headers: { get: () => 'text/html' },
+  arrayBuffer: async () => new ArrayBuffer(0)
 });
 
 beforeEach(() => {
@@ -86,6 +94,48 @@ it('does not store a captive portal response', async () => {
 
   await storeRemoteImage(url);
 
+  expect(putCachedImage).not.toHaveBeenCalled();
+});
+
+it('stores the image once the captive portal lets the request through', async () => {
+  const url = 'https://example.com/signed-in.png';
+  getCachedImage.mockResolvedValue(undefined);
+  global.fetch
+    .mockResolvedValueOnce(okResponse('text/html; charset=utf-8'))
+    .mockResolvedValueOnce(okResponse());
+
+  await storeRemoteImage(url);
+  expect(putCachedImage).not.toHaveBeenCalled();
+
+  await storeRemoteImage(url);
+  expect(putCachedImage).toHaveBeenCalledTimes(1);
+  expect(global.fetch).toHaveBeenCalledTimes(2);
+});
+
+it('retries a url that failed with a transient server error', async () => {
+  const url = 'https://example.com/busy.png';
+  getCachedImage.mockResolvedValue(undefined);
+  global.fetch
+    .mockResolvedValueOnce(errorResponse(503))
+    .mockResolvedValueOnce(okResponse());
+
+  await storeRemoteImage(url);
+  expect(putCachedImage).not.toHaveBeenCalled();
+
+  await storeRemoteImage(url);
+  expect(putCachedImage).toHaveBeenCalledTimes(1);
+  expect(global.fetch).toHaveBeenCalledTimes(2);
+});
+
+it('does not retry a url the server says is not there', async () => {
+  const url = 'https://example.com/gone.png';
+  getCachedImage.mockResolvedValue(undefined);
+  global.fetch.mockResolvedValue(errorResponse(404));
+
+  await storeRemoteImage(url);
+  await storeRemoteImage(url);
+
+  expect(global.fetch).toHaveBeenCalledTimes(1);
   expect(putCachedImage).not.toHaveBeenCalled();
 });
 
