@@ -125,7 +125,7 @@ function Symbol(props) {
   };
 
   return (
-    <div className={symbolClassName} image={image} {...other}>
+    <div className={symbolClassName} {...other}>
       {props.type === 'live' && (
         <OutlinedInput
           id="outlined-live-input"
