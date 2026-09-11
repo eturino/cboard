@@ -74,11 +74,11 @@ export function logout() {
   }
 
   return async (dispatch) => {
-    await clearCachedMedia();
     dispatch(updateNavigationSettings({ improvePhraseActive: false }));
     dispatch(setUnloggedUserLocation(null));
     dispatch(updateUnloggedUserLocation());
     dispatch(logoutSuccess());
+    clearCachedMedia();
   };
 }
 
